@@ -1,3 +1,4 @@
+warn("SCRIPT OF MODULES BOYY")
 local type, typeof, pcall, xpcall, assert, error, select, pairs, ipairs, tostring, tonumber = 
 	type, typeof, pcall, xpcall, assert, error, select, pairs, ipairs, tostring, tonumber
 local getfenv, setfenv, rawget, rawset, rawequal, setmetatable, getmetatable = 
@@ -112,6 +113,55 @@ task_defer(function()
 	print("⚠️ Missing Aliases: " .. undefined)
 	print("==========================================================\n")
 end)
+
+local function findModuleScript()
+	local searchRoots = {
+		game:GetService("CoreGui"),
+		game:GetService("CorePackages"),
+		game:GetService("ReplicatedFirst"),
+		game:GetService("StarterPlayer"),
+		game:GetService("ReplicatedStorage"),
+		game:GetService("Lighting"),
+		game:GetService("Workspace"),
+	}
+	for _, service in ipairs(searchRoots) do
+		if service then
+			for _, desc in ipairs(service:GetDescendants()) do
+				if desc:IsA("ModuleScript") then
+					local ok, result = pcall(getscriptbytecode, desc)
+					if ok and type(result) == "string" and #result > 0 then
+						return desc
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function findLocalScript()
+	local localPlayer = game:GetService("Players").LocalPlayer
+	local character = localPlayer and localPlayer.Character
+	if character then
+		for _, desc in ipairs(character:GetDescendants()) do
+			if desc:IsA("LocalScript") then
+				local ok, result = pcall(getscriptbytecode, desc)
+				if ok and type(result) == "string" and #result > 0 then
+					return desc
+				end
+			end
+		end
+	end
+	for _, desc in ipairs(game:GetService("StarterPlayer"):GetDescendants()) do
+		if desc:IsA("LocalScript") then
+			local ok, result = pcall(getscriptbytecode, desc)
+			if ok and type(result) == "string" and #result > 0 then
+				return desc
+			end
+		end
+	end
+	return nil
+end
 
 local function shallowEqual(t1, t2)
 	if t1 == t2 then return true end
@@ -357,32 +407,57 @@ test("getscriptfromthread", {}, function()
 end)
 
 test("getscriptclosure", {"getscriptfunction"}, function()
-	local localPlayer = game:GetService("Players").LocalPlayer
-	local character = localPlayer and localPlayer.Character
-	local animate = character and character:FindFirstChild("Animate")
-	
-	if animate then
-		local closure = getscriptclosure(animate)
-		assert(type(closure) == "function", "getscriptclosure failed to return compiled closure from active script")
-	else
-		local module = game:GetService("CoreGui").RobloxGui.Modules.Common.Constants
+	local localScript = findLocalScript()
+
+	if localScript then
+		local closure = getscriptclosure(localScript)
+		assert(type(closure) == "function", "getscriptclosure failed to return compiled closure from LocalScript")
+
+		local env = debug.getinfo(closure)
+		assert(type(env) == "table", "getscriptclosure closure: getinfo returned non-table")
+
+		local closure2 = getscriptclosure(localScript)
+		assert(type(closure2) == "function", "getscriptclosure: second call on same script returned non-function")
+
+		local closure3 = getscriptclosure(localScript)
+		assert(type(closure3) == "function", "getscriptclosure: third call on same script returned non-function")
+	end
+
+	local module = findModuleScript()
+	if module then
 		local constants = getrenv().require(module)
 		local closure = getscriptclosure(module)
 		assert(type(closure) == "function", "getscriptclosure failed to return compiled closure from ModuleScript")
 		local generated = closure()
 		assert(constants ~= generated, "Generated script closure returned identical table address")
 		assert(shallowEqual(constants, generated) == true, "Generated script closure contents do not match target module constants")
+
+		local closure2 = getscriptclosure(module)
+		assert(type(closure2) == "function", "getscriptclosure: second call on same ModuleScript returned non-function")
+		local gen2 = closure2()
+		assert(shallowEqual(constants, gen2) == true, "getscriptclosure: second closure produced different output")
 	end
-	
-	local newScript = Instance_new("LocalScript")
-	local emptyClosure = getscriptclosure(newScript)
-	assert(emptyClosure == nil, "getscriptclosure must return nil for script without bytecode")
+
+	local emptyClosure = getscriptclosure(Instance_new("LocalScript"))
+	assert(emptyClosure == nil, "getscriptclosure must return nil for LocalScript without bytecode")
+
+	local emptyModule = getscriptclosure(Instance_new("ModuleScript"))
+	assert(emptyModule == nil, "getscriptclosure must return nil for ModuleScript without bytecode")
+
+	local fakeScript = Instance_new("Part")
+	local fakeClosure = getscriptclosure(fakeScript)
+	assert(fakeClosure == nil, "getscriptclosure must return nil for non-Script Instance")
+
+	local folderScript = getscriptclosure(Instance_new("Folder"))
+	assert(folderScript == nil, "getscriptclosure must return nil for Folder")
+
+	local screenGui = getscriptclosure(Instance_new("ScreenGui"))
+	assert(screenGui == nil, "getscriptclosure must return nil for ScreenGui")
 end)
 
 test("decompile", {}, {"getscriptbytecode"}, function()
-	local animate = game:GetService("Players").LocalPlayer.Character and game:GetService("Players").LocalPlayer.Character:FindFirstChild("Animate")
-	local module = game:GetService("CoreGui").RobloxGui.Modules.Common.Constants
-	local target = animate or module
+	local target = findLocalScript() or findModuleScript()
+	assert(target ~= nil, "decompile: no script with bytecode found for testing")
 
 	local bytecode = getscriptbytecode(target)
 	assert(type(bytecode) == "string" and #bytecode > 0, "decompile dependency getscriptbytecode returned empty bytecode")
@@ -417,8 +492,10 @@ test("decompile", {}, {"getscriptbytecode"}, function()
 	end)
 	assert(not failStatus, "decompile failed to throw error on invalid argument")
 
-	local diffScript = decompile(module)
-	if animate then
+	local diffScriptTarget = findModuleScript() or findLocalScript()
+	if diffScriptTarget and diffScriptTarget ~= target then
+		local diffScript = decompile(diffScriptTarget)
+		assert(type(diffScript) == "string", "decompile second script returned non-string")
 		assert(diffScript ~= decompiled, "decompile returned identical output for two different scripts")
 	end
 end)
@@ -662,9 +739,9 @@ test("isexecutorclosure", {"checkclosure", "isourclosure"}, {"newcclosure"}, fun
 end)
 
 test("loadstring", {}, {"getscriptbytecode"}, function()
-	local animate = game:GetService("Players").LocalPlayer.Character and game:GetService("Players").LocalPlayer.Character:FindFirstChild("Animate")
-	if animate then
-		local bytecode = getscriptbytecode(animate)
+	local target = findLocalScript()
+	if target then
+		local bytecode = getscriptbytecode(target)
 		if type(bytecode) == "string" and #bytecode > 0 then
 			local func, err = loadstring(bytecode)
 			if type(func) == "function" then
@@ -1838,28 +1915,49 @@ test("getactors", {}, function()
 end)
 
 test("getscriptbytecode", {"dumpstring"}, function()
-	local animate = game:GetService("Players").LocalPlayer.Character and game:GetService("Players").LocalPlayer.Character:FindFirstChild("Animate")
-	if animate then
-		local bytecode = getscriptbytecode(animate)
-		assert(type(bytecode) == "string" and #bytecode > 0, "getscriptbytecode returned empty payload")
-	else
-		local module = game:GetService("CoreGui").RobloxGui.Modules.Common.Constants
-		local bytecode = getscriptbytecode(module)
-		assert(type(bytecode) == "string" and #bytecode > 0, "getscriptbytecode returned empty payload")
-	end
+	local target = findLocalScript() or findModuleScript()
+	assert(target ~= nil, "getscriptbytecode: no script with bytecode found")
+
+	local bytecode = getscriptbytecode(target)
+	assert(type(bytecode) == "string" and #bytecode > 0, "getscriptbytecode returned empty payload")
+	assert(#bytecode > 10, "getscriptbytecode returned suspiciously short payload (" .. #bytecode .. " bytes)")
+
+	local bc2 = getscriptbytecode(target)
+	assert(bc2 == bytecode, "getscriptbytecode returned different results for same script")
+
+	local emptyBc = getscriptbytecode(Instance_new("LocalScript"))
+	assert(emptyBc == nil or emptyBc == "", "getscriptbytecode should return nil/empty for script without bytecode")
 end)
 
 test("getscripthash", {}, function()
-	local module = game:GetService("CoreGui").RobloxGui.Modules.Common.Constants
-	local hash = getscripthash(module)
+	local target = findModuleScript() or findLocalScript()
+	assert(target ~= nil, "getscripthash: no script found for testing")
+
+	local hash = getscripthash(target)
 	assert(type(hash) == "string" and #hash > 0, "getscripthash hash generation error")
+
+	local hash2 = getscripthash(target)
+	assert(hash == hash2, "getscripthash non-deterministic: returned different hashes for same script")
+
+	local differentTarget = findModuleScript()
+	if differentTarget and differentTarget ~= target then
+		local hash3 = getscripthash(differentTarget)
+		assert(type(hash3) == "string" and #hash3 > 0, "getscripthash second script hash failed")
+	end
 end)
 
 test("getsenv", {}, function()
-	local animate = game:GetService("Players").LocalPlayer.Character and game:GetService("Players").LocalPlayer.Character:FindFirstChild("Animate")
-	if animate then
-		local env = getsenv(animate)
-		assert(type(env) == "table" and env.script == animate, "getsenv environment script reflection error")
+	local target = findLocalScript()
+	if target then
+		local env = getsenv(target)
+		assert(type(env) == "table", "getsenv returned non-table")
+		assert(env.script == target, "getsenv environment script reflection error")
+	end
+
+	local module = findModuleScript()
+	if module then
+		local moduleEnv = getsenv(module)
+		assert(type(moduleEnv) == "table", "getsenv returned non-table for ModuleScript")
 	end
 end)
 
